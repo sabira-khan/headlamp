@@ -146,6 +146,42 @@ describe('Pod class', () => {
     expect(status.reason).toBe('ExitCode:1');
   });
 
+  describe('getDetailedStatus while the pod is being deleted', () => {
+    const deleting = (phase: string, state: any) => {
+      const data = JSON.parse(JSON.stringify(mockPodData));
+      data.metadata.deletionTimestamp = '2020-01-01T00:00:00Z';
+      data.spec.containers = [{ name: 'container-1' }];
+      data.status = {
+        phase,
+        containerStatuses: [{ name: 'container-1', ready: false, restartCount: 0, state }],
+      };
+      return new Pod(data).getDetailedStatus().reason;
+    };
+
+    it('shows Terminating while containers still run', () => {
+      expect(deleting('Running', { running: { startedAt: '2020-01-01T00:00:00Z' } })).toBe(
+        'Terminating'
+      );
+    });
+
+    it('keeps Completed for a pod that succeeded', () => {
+      expect(deleting('Succeeded', { terminated: { reason: 'Completed', exitCode: 0 } })).toBe(
+        'Completed'
+      );
+    });
+
+    it('keeps Error for a pod that failed', () => {
+      expect(deleting('Failed', { terminated: { reason: 'Error', exitCode: 1 } })).toBe('Error');
+    });
+
+    it('still shows Unknown when the node was lost', () => {
+      const data = JSON.parse(JSON.stringify(mockPodData));
+      data.metadata.deletionTimestamp = '2020-01-01T00:00:00Z';
+      data.status = { phase: 'Succeeded', reason: 'NodeLost' };
+      expect(new Pod(data).getDetailedStatus().reason).toBe('Unknown');
+    });
+  });
+
   describe('getHealth', () => {
     const makePod = (status: any, metadata: any = {}) =>
       new Pod({
@@ -178,6 +214,12 @@ describe('Pod class', () => {
     it('classifies a terminating (deletionTimestamp) pod as transitional', () => {
       const pod = makePod({ phase: 'Running' }, { deletionTimestamp: '2020-01-01T00:00:00Z' });
       expect(pod.getHealth()).toBe('transitional');
+    });
+
+    it('classifies a finished pod that is being deleted by its phase', () => {
+      const deletion = { deletionTimestamp: '2020-01-01T00:00:00Z' };
+      expect(makePod({ phase: 'Succeeded' }, deletion).getHealth()).toBe('healthy');
+      expect(makePod({ phase: 'Failed' }, deletion).getHealth()).toBe('failed');
     });
 
     it('classifies a lost node (NodeLost) pod as failed', () => {

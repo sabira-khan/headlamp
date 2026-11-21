@@ -471,6 +471,10 @@ class Pod extends KubeObject<KubePod> {
     return false;
   }
 
+  private isPhaseTerminal(): boolean {
+    return this.status?.phase === 'Succeeded' || this.status?.phase === 'Failed';
+  }
+
   private hasPodReadyCondition(conditions: KubeCondition[]): boolean {
     for (const condition of conditions) {
       if (condition.type === 'Ready' && condition.status === 'True') {
@@ -618,9 +622,11 @@ class Pod extends KubeObject<KubePod> {
     // Instead of `pod.deletionTimestamp`. Important!
     const deletionTimestamp = this.metadata.deletionTimestamp;
 
+    // Like kubectl, a pod that already finished keeps showing Completed or
+    // Error while it is being deleted, instead of Terminating.
     if (!!deletionTimestamp && this.status?.reason === 'NodeLost') {
       reason = 'Unknown';
-    } else if (!!deletionTimestamp) {
+    } else if (!!deletionTimestamp && !this.isPhaseTerminal()) {
       reason = 'Terminating';
     }
 
@@ -651,8 +657,14 @@ class Pod extends KubeObject<KubePod> {
    */
   getHealth(): WorkloadHealthCategory {
     // A lost node is reported as Unknown (unhealthy), matching getDetailedStatus.
+    // A finished pod that is being deleted is classified by its phase below.
     if (this.metadata.deletionTimestamp) {
-      return this.status?.reason === 'NodeLost' ? 'failed' : 'transitional';
+      if (this.status?.reason === 'NodeLost') {
+        return 'failed';
+      }
+      if (!this.isPhaseTerminal()) {
+        return 'transitional';
+      }
     }
 
     const phase = this.status?.phase;
